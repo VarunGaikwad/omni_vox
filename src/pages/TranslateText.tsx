@@ -1,5 +1,5 @@
 import { ArrowLeftRight, Loader2, Copy, Check, Volume2, X } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   LANGUAGES,
@@ -20,92 +20,96 @@ export default function TranslateText() {
   const [targetLang, setTargetLang] = useState(
     searchParams.get("tl") || DEFAULT_TARGET_LANG,
   );
-  const [operation] = useState(searchParams.get("op") || "translate");
+
   const [isTranslating, setIsTranslating] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Sync URL params
+  const abortRef = useRef<AbortController | null>(null);
+
+  const MAX_CHARS = 5000;
+
+  // 🔥 Sync URL immediately (no debounce needed)
+  useEffect(() => {
+    setSearchParams(
+      { sl: sourceLang, tl: targetLang, text: sourceText },
+      { replace: true },
+    );
+  }, [sourceText, sourceLang, targetLang, setSearchParams]);
+
+  const translateDocument = useCallback(async (text: string, to: string) => {
+    if (!text.trim()) {
+      setTranslatedText("");
+      return;
+    }
+
+    if (text.length > MAX_CHARS) {
+      setTranslatedText("Text exceeds maximum allowed length.");
+      return;
+    }
+
+    // Cancel previous request
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setIsTranslating(true);
+
+    try {
+      const response = await client.get("/unauth/translation", {
+        params: { tl: to, text },
+        signal: controller.signal,
+      });
+
+      setTranslatedText(response.data.translation);
+    } catch (error: any) {
+      if (error.name === "CanceledError") return;
+
+      if (error.response?.status === 429) {
+        setTranslatedText("Rate limit exceeded. Wait 30s.");
+      } else {
+        setTranslatedText("Translation failed.");
+      }
+    } finally {
+      setIsTranslating(false);
+    }
+  }, []);
+
+  // 🔥 Single debounce for translation only
   useEffect(() => {
     const timer = setTimeout(() => {
-      setSearchParams(
-        { sl: sourceLang, tl: targetLang, op: operation, text: sourceText },
-        { replace: true },
-      );
+      translateDocument(sourceText, targetLang);
     }, DEBOUNCE_DELAY);
+
     return () => clearTimeout(timer);
-  }, [sourceText, sourceLang, targetLang, operation, setSearchParams]);
+  }, [sourceText, targetLang, translateDocument]);
 
-  // Translation logic
-  const translateDocument = useCallback(
-    async (text: string, from: string, to: string) => {
-      if (!text.trim()) {
-        setTranslatedText("");
-        return;
-      }
-
-      setIsTranslating(true);
-      try {
-        const response = await client.get("/unauth/translation", {
-          params: { sl: from, tl: to, text, op: operation },
-        });
-        setTranslatedText(response.data.translation);
-      } catch (error: any) {
-        console.error(
-          "Translation error:",
-          error.response?.status,
-          error.message,
-        );
-        if (error.response?.status === 429) {
-          setTranslatedText("Rate limit exceeded. Please wait a moment...");
-        } else {
-          setTranslatedText("Translation failed. Please try again.");
-        }
-      } finally {
-        setIsTranslating(false);
-      }
-    },
-    [operation],
-  );
-
-  useEffect(() => {
-    if (operation === "translate") {
-      const debounceTimer = setTimeout(() => {
-        translateDocument(sourceText, sourceLang, targetLang);
-      }, DEBOUNCE_DELAY);
-      return () => clearTimeout(debounceTimer);
-    }
-  }, [sourceText, sourceLang, targetLang, operation, translateDocument]);
-
-  // Swap languages
   const handleSwapLanguages = () => {
     setSourceLang(targetLang);
     setTargetLang(sourceLang);
-    setSourceText(translatedText || "");
+    setSourceText(translatedText);
+    setTranslatedText("");
   };
 
-  // Copy translation
   const handleCopy = async () => {
     if (!translatedText) return;
     await navigator.clipboard.writeText(translatedText);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopied(false), 1500);
   };
 
-  // Clear source text
   const handleClear = () => {
     setSourceText("");
     setTranslatedText("");
   };
 
-  // Get display name for language
   const getLangDisplay = (code: string) => {
     const lang = LANGUAGES.find((l) => l.code === code);
     return lang ? lang.name : code;
   };
-
   const charCount = sourceText.length;
-  const MAX_CHARS = 5000;
-
   return (
     <div className="flex flex-col gap-4 flex-1 min-h-0">
       {/* ── Language selector bar ───────────────────────── */}
@@ -121,10 +125,10 @@ export default function TranslateText() {
             onChange={(e) => setSourceLang(e.target.value)}
             className="
               w-full px-4 py-2.5 rounded-xl appearance-none cursor-pointer
-              bg-white/[0.04] border border-white/[0.08]
+              bg-white/4 border border-white/8
               text-gray-200 text-sm font-medium
               focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/40
-              hover:bg-white/[0.06] hover:border-white/[0.12]
+              hover:bg-white/6 hover:border-white/12
               transition-all duration-200 ease-out
             "
           >
@@ -160,7 +164,7 @@ export default function TranslateText() {
             onClick={handleSwapLanguages}
             className="
               group/swap p-2.5 rounded-xl cursor-pointer
-              bg-gradient-to-br from-indigo-600/20 to-purple-600/20
+              bg-linear-to-br from-indigo-600/20 to-purple-600/20
               border border-indigo-500/20
               hover:from-indigo-600/30 hover:to-purple-600/30
               hover:border-indigo-500/40 hover:scale-110
@@ -185,10 +189,10 @@ export default function TranslateText() {
             onChange={(e) => setTargetLang(e.target.value)}
             className="
               w-full px-4 py-2.5 rounded-xl appearance-none cursor-pointer
-              bg-white/[0.04] border border-white/[0.08]
+              bg-white/4 border border-white/8
               text-gray-200 text-sm font-medium
               focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/40
-              hover:bg-white/[0.06] hover:border-white/[0.12]
+              hover:bg-white/6 hover:border-white/12
               transition-all duration-200 ease-out
             "
           >
@@ -222,10 +226,10 @@ export default function TranslateText() {
       <div className="grid md:grid-cols-2 gap-4 flex-1 min-h-0">
         {/* Source text panel */}
         <div className="relative group/source flex flex-col min-h-0">
-          <div className="absolute -inset-[1px] rounded-2xl bg-gradient-to-br from-indigo-500/20 via-transparent to-transparent opacity-0 group-hover/source:opacity-100 transition-opacity duration-500 pointer-events-none" />
-          <div className="relative bg-white/[0.03] border border-white/[0.06] rounded-2xl overflow-hidden transition-all duration-300 hover:border-white/[0.1] flex flex-col flex-1 min-h-0">
+          <div className="absolute -inset-px rounded-2xl bg-linear-to-br from-indigo-500/20 via-transparent to-transparent opacity-0 group-hover/source:opacity-100 transition-opacity duration-500 pointer-events-none" />
+          <div className="relative bg-white/3 border border-white/6 rounded-2xl overflow-hidden transition-all duration-300 hover:border-white/10 flex flex-col flex-1 min-h-0">
             {/* Source header */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.04] shrink-0">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-white/4 shrink-0">
               <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
                 <span
                   className="w-2 h-2 rounded-full bg-indigo-500/60"
@@ -238,7 +242,7 @@ export default function TranslateText() {
                   <button
                     id="clear-source-btn"
                     onClick={handleClear}
-                    className="p-1 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/[0.05] transition-all cursor-pointer"
+                    className="p-1 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-all cursor-pointer"
                     title="Clear"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -246,12 +250,12 @@ export default function TranslateText() {
                 )}
                 <button
                   id="tts-source-btn"
-                  className="p-1 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/[0.05] transition-all cursor-pointer"
+                  className="p-1 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-all cursor-pointer"
                   title="Listen"
                   onClick={() => {
                     if (sourceText && window.speechSynthesis) {
                       const utter = new SpeechSynthesisUtterance(sourceText);
-                      utter.lang = sourceLang;
+                      utter.lang = getSpeechLang(sourceLang);
                       window.speechSynthesis.speak(utter);
                     }
                   }}
@@ -276,7 +280,7 @@ export default function TranslateText() {
             />
 
             {/* Character count */}
-            <div className="flex items-center justify-end px-4 py-1.5 border-t border-white/[0.04] shrink-0">
+            <div className="flex items-center justify-end px-4 py-1.5 border-t border-white/4 shrink-0">
               <span
                 className={`text-[10px] font-mono tracking-wide ${
                   charCount > MAX_CHARS * 0.9
@@ -292,10 +296,10 @@ export default function TranslateText() {
 
         {/* Translation output panel */}
         <div className="relative group/target flex flex-col min-h-0">
-          <div className="absolute -inset-[1px] rounded-2xl bg-gradient-to-br from-purple-500/20 via-transparent to-transparent opacity-0 group-hover/target:opacity-100 transition-opacity duration-500 pointer-events-none" />
-          <div className="relative bg-white/[0.03] border border-white/[0.06] rounded-2xl overflow-hidden transition-all duration-300 hover:border-white/[0.1] flex flex-col flex-1 min-h-0">
+          <div className="absolute -inset-px rounded-2xl bg-linear-to-br from-purple-500/20 via-transparent to-transparent opacity-0 group-hover/target:opacity-100 transition-opacity duration-500 pointer-events-none" />
+          <div className="relative bg-white/3 border border-white/6 rounded-2xl overflow-hidden transition-all duration-300 hover:border-white/10 flex flex-col flex-1 min-h-0">
             {/* Target header */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.04] shrink-0">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-white/4 shrink-0">
               <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
                 <span
                   className="w-2 h-2 rounded-full bg-purple-500/60"
@@ -315,7 +319,7 @@ export default function TranslateText() {
                     p-1 rounded-lg transition-all cursor-pointer
                     ${
                       translatedText
-                        ? "text-gray-500 hover:text-gray-300 hover:bg-white/[0.05]"
+                        ? "text-gray-500 hover:text-gray-300 hover:bg-white/5"
                         : "text-gray-700 cursor-not-allowed"
                     }
                   `}
@@ -329,14 +333,14 @@ export default function TranslateText() {
                 </button>
                 <button
                   id="tts-target-btn"
-                  className="p-1 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/[0.05] transition-all cursor-pointer"
+                  className="p-1 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-all cursor-pointer"
                   title="Listen"
                   onClick={() => {
                     if (translatedText && window.speechSynthesis) {
                       const utter = new SpeechSynthesisUtterance(
                         translatedText,
                       );
-                      utter.lang = targetLang;
+                      utter.lang = getSpeechLang(targetLang);
                       window.speechSynthesis.speak(utter);
                     }
                   }}
@@ -363,13 +367,13 @@ export default function TranslateText() {
               {/* Shimmer loading overlay */}
               {isTranslating && (
                 <div className="absolute inset-0 pointer-events-none">
-                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent animate-shimmer" />
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-linear-to-r from-transparent via-indigo-500/50 to-transparent animate-shimmer" />
                 </div>
               )}
             </div>
 
             {/* Translated char count */}
-            <div className="flex items-center justify-end px-4 py-1.5 border-t border-white/[0.04] shrink-0">
+            <div className="flex items-center justify-end px-4 py-1.5 border-t border-white/4 shrink-0">
               <span className="text-[10px] font-mono tracking-wide text-gray-600">
                 {translatedText.length.toLocaleString()} chars
               </span>
@@ -380,3 +384,8 @@ export default function TranslateText() {
     </div>
   );
 }
+
+const getSpeechLang = (code: string) => {
+  if (code === "hinglish") return "hi-IN";
+  return code;
+};

@@ -18,6 +18,7 @@ export const LANGUAGES: Language[] = [
   { code: "it", name: "Italian", nativeName: "Italiano" },
   { code: "nl", name: "Dutch", nativeName: "Nederlands" },
   { code: "hi", name: "Hindi", nativeName: "हिन्दी" },
+  { code: "hinglish", name: "Hinglish", nativeName: "Hinglish" },
   { code: "tr", name: "Turkish", nativeName: "Türkçe" },
   { code: "pl", name: "Polish", nativeName: "Polski" },
 ];
