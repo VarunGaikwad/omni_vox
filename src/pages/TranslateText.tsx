@@ -36,55 +36,63 @@ export default function TranslateText() {
     );
   }, [sourceText, sourceLang, targetLang, setSearchParams]);
 
-  const translateDocument = useCallback(async (text: string, to: string) => {
-    if (!text.trim()) {
-      setTranslatedText("");
-      return;
-    }
-
-    if (text.length > MAX_CHARS) {
-      setTranslatedText("Text exceeds maximum allowed length.");
-      return;
-    }
-
-    // Cancel previous request
-    if (abortRef.current) {
-      abortRef.current.abort();
-    }
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setIsTranslating(true);
-
-    try {
-      const response = await client.get("/unauth/translation", {
-        params: { tl: to, text },
-        signal: controller.signal,
-      });
-
-      setTranslatedText(response.data.translation);
-    } catch (error: any) {
-      if (error.name === "CanceledError") return;
-
-      if (error.response?.status === 429) {
-        setTranslatedText("Rate limit exceeded. Wait 30s.");
-      } else {
-        setTranslatedText("Translation failed.");
+  const translateDocument = useCallback(
+    async (text: string, sl: string, to: string) => {
+      if (!text.trim()) {
+        setTranslatedText("");
+        return;
       }
-    } finally {
-      setIsTranslating(false);
-    }
-  }, []);
+
+      if (text.length > MAX_CHARS) {
+        setTranslatedText("Text exceeds maximum allowed length.");
+        return;
+      }
+
+      // Cancel previous request
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setIsTranslating(true);
+
+      try {
+        const response = await client.get("/unauth/translation", {
+          params: { sl, tl: to, text },
+          signal: controller.signal,
+        });
+
+        setTranslatedText(response.data.translation);
+        if (response.data.cached) console.log("served from cache");
+      } catch (error: any) {
+        if (error.name === "CanceledError") return;
+
+        if (error.response?.status === 429) {
+          const retryAfter = error.response.data?.retryAfter ?? 30;
+          setTranslatedText(
+            `Rate limit exceeded. Try again in ${retryAfter}s.`,
+          );
+        } else if (error.response?.status === 504) {
+          setTranslatedText("Translation timed out. Please try again.");
+        } else {
+          setTranslatedText("Translation failed.");
+        }
+      } finally {
+        setIsTranslating(false);
+      }
+    },
+    [],
+  );
 
   // 🔥 Single debounce for translation only
   useEffect(() => {
     const timer = setTimeout(() => {
-      translateDocument(sourceText, targetLang);
+      translateDocument(sourceText, sourceLang, targetLang); // ← add sourceLang
     }, DEBOUNCE_DELAY);
-
     return () => clearTimeout(timer);
-  }, [sourceText, targetLang, translateDocument]);
+  }, [sourceText, sourceLang, targetLang, translateDocument]);
 
   const handleSwapLanguages = () => {
     setSourceLang(targetLang);
