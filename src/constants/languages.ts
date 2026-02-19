@@ -25,4 +25,4 @@ export const LANGUAGES: Language[] = [
 
 export const DEFAULT_SOURCE_LANG = "en";
 export const DEFAULT_TARGET_LANG = "ja";
-export const DEBOUNCE_DELAY = 500;
+export const DEBOUNCE_DELAY = 1500;
